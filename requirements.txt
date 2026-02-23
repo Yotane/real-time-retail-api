@@ -1,7 +1,7 @@
 # API
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-pydantic==2.5.3
+fastapi==0.128.5
+uvicorn[standard]==0.40.0
+pydantic==2.12.5
 
 # Database (MySQL)
 mysql-connector-python==9.6.0
@@ -11,7 +11,7 @@ confluent-kafka==2.4.0
 
 # Data
 pandas==3.0.1
-numpy==1.26.3
+numpy==2.4.2
 
 # ETL / Utils
 python-dotenv==1.2.1

@@ -35,3 +35,20 @@ CREATE TABLE IF NOT EXISTS sales_facts (
     INDEX idx_product       (product_id),
     INDEX idx_store_product (store_id, product_id)
 );
+
+CREATE TABLE IF NOT EXISTS kafka_events (
+    id              BIGINT          PRIMARY KEY AUTO_INCREMENT,
+    event_id        VARCHAR(36)     NOT NULL,
+    store_id        VARCHAR(10)     NOT NULL,
+    product_id      VARCHAR(10)     NOT NULL,
+    date            DATE            NOT NULL,
+    units_sold      INT,
+    price           DECIMAL(10, 2),
+    discount        DECIMAL(5, 2),
+    is_holiday_promo TINYINT(1)     DEFAULT 0,
+    weather         VARCHAR(20),
+    received_at     TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_kafka_store   (store_id),
+    INDEX idx_kafka_product (product_id),
+    INDEX idx_kafka_date    (date)
+);
