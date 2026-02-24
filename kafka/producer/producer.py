@@ -4,6 +4,7 @@ import time
 import json
 import uuid
 import logging
+import httpx
 import mysql.connector
 from confluent_kafka import Producer
 from dotenv import load_dotenv
@@ -67,6 +68,7 @@ def fetch_day_rows(conn, day: str) -> list:
 
 def send_day(producer, topic: str, rows: list, delay: float):
     log.info(f"Sending {len(rows)} events for day {rows[0]['date'] if rows else '?'}")
+    
     for row in rows:
         event = {
             "event_id":        str(uuid.uuid4()),
@@ -93,45 +95,60 @@ def send_day(producer, topic: str, rows: list, delay: float):
 
 
 def run():
-    import httpx
-
-    topic       = os.getenv("KAFKA_TOPIC_SALES",       "sales-events")
-    delay       = float(os.getenv("PRODUCER_DELAY_SECONDS", "0.05"))
-    api_url     = os.getenv("API_URL", "http://api:8000")
+    topic         = os.getenv("KAFKA_TOPIC_SALES", "sales-events")
+    delay         = float(os.getenv("PRODUCER_DELAY_SECONDS", "0.05"))
+    api_url       = os.getenv("API_URL", "http://api:8000")
     poll_interval = float(os.getenv("PRODUCER_POLL_SECONDS", "1.0"))
 
     log.info("Producer starting...")
     conn     = get_connection()
     producer = get_producer()
+    dates    = fetch_all_dates(conn)
 
-    # Register all available dates with the API
-    dates = fetch_all_dates(conn)
-    try:
-        httpx.post(f"{api_url}/simulation/init", json={"dates": dates}, timeout=10)
-        log.info("Registered dates with API")
-    except Exception as e:
-        log.warning(f"Could not register dates: {e}")
+    # Retry registering dates with API until it succeeds
+    log.info(f"Registering {len(dates)} dates with API...")
+    while True:
+        try:
+            resp = httpx.post(
+                f"{api_url}/simulation/init",
+                json={"dates": dates},
+                timeout=5
+            )
+            if resp.status_code == 200:
+                log.info("Dates registered successfully with API")
+                break
+            else:
+                log.warning(f"API returned {resp.status_code}, retrying...")
+        except Exception as e:
+            log.warning(f"Could not reach API: {e} — retrying in 2s...")
+        time.sleep(2)
 
     current_day = None
 
     while True:
         try:
-            resp = httpx.get(f"{api_url}/simulation/status", timeout=5)
-            state = resp.json()
-        except Exception:
-            time.sleep(poll_interval)
-            continue
+            resp        = httpx.get(f"{api_url}/simulation/status", timeout=5)
+            state       = resp.json()
+            wanted_day  = state.get("current_day")
+            if wanted_day is None:
+                current_day = None
 
-        wanted_day = state.get("current_day")
+            if wanted_day and wanted_day != current_day:
+                current_day = wanted_day
+                rows = fetch_day_rows(conn, current_day)
+                if rows:
+                    try:
+                        httpx.post(f"{api_url}/simulation/day-total",
+                                json={"total": len(rows)}, timeout=3)
+                    except Exception:
+                        pass
+                    send_day(producer, topic, rows, delay)
 
-        if wanted_day and wanted_day != current_day:
-            current_day = wanted_day
-            rows = fetch_day_rows(conn, current_day)
-            if rows:
-                send_day(producer, topic, rows, delay)
-            current_day = wanted_day
+        except Exception as e:
+            log.warning(f"Polling error: {e}")
 
         time.sleep(poll_interval)
+
 
 
 if __name__ == "__main__":

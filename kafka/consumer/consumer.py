@@ -32,29 +32,24 @@ def get_consumer():
     return Consumer({
         "bootstrap.servers":  os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"),
         "group.id":           os.getenv("KAFKA_GROUP_ID", "retail-consumer-group"),
-        "auto.offset.reset":  "earliest",
-        "enable.auto.commit": True
+        "auto.offset.reset":  "latest",
+        "enable.auto.commit": True,
+        "auto.commit.interval.ms": 1000
     })
 
 
 def insert_event(conn, event: dict):
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO kafka_events (
+        INSERT IGNORE INTO kafka_events (
             event_id, store_id, product_id, date,
             units_sold, price, discount,
             is_holiday_promo, weather
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
-        event["event_id"],
-        event["store_id"],
-        event["product_id"],
-        event["date"],
-        event["units_sold"],
-        event["price"],
-        event["discount"],
-        event["is_holiday_promo"],
-        event["weather"]
+        event["event_id"], event["store_id"], event["product_id"], event["date"],
+        event["units_sold"], event["price"], event["discount"],
+        event["is_holiday_promo"], event["weather"]
     ))
     conn.commit()
     cursor.close()
