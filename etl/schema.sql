@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS sales_facts (
     FOREIGN KEY (date)          REFERENCES calendar(date),
     FOREIGN KEY (store_id)      REFERENCES stores(store_id),
     FOREIGN KEY (product_id)    REFERENCES products(product_id),
+    UNIQUE INDEX idx_unique_sale (date, store_id, product_id),
     INDEX idx_date          (date),
     INDEX idx_store         (store_id),
     INDEX idx_product       (product_id),
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS kafka_events (
     is_holiday_promo TINYINT(1)     DEFAULT 0,
     weather         VARCHAR(20),
     received_at     TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE INDEX idx_event_id       (event_id),
     INDEX idx_kafka_store   (store_id),
     INDEX idx_kafka_product (product_id),
     INDEX idx_kafka_date    (date)

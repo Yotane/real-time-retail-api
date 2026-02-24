@@ -219,7 +219,12 @@
     };
   }
 
+  let currentDay = null;
+
   function appendEvent(event) {
+    // Only show events for the current simulation day
+    if (currentDay && event.date !== currentDay) return;
+    
     const feed = document.getElementById('feed');
     const empty = feed.querySelector('.empty-state');
     if (empty) empty.remove();
@@ -267,11 +272,10 @@
     document.getElementById('progress-bar').style.width = pct + '%';
     document.getElementById('progress-label').textContent = `${totalEvents} / ${total} events`;
     if (totalEvents >= total) {
-      isRunning = false;
-      document.getElementById('btn-next').disabled = false;
-      document.getElementById('status-bar').textContent = 'Day complete';
+        document.getElementById('btn-next').disabled = false;
+        document.getElementById('status-bar').textContent = '✓ Day complete — click Next Day';
     }
-  }
+}
 
   async function nextDay() {
     document.getElementById('btn-next').disabled = true;
@@ -282,6 +286,7 @@
 
     const resp = await fetch('/simulation/next-day', { method: 'POST' });
     const data = await resp.json();
+    currentDay = data.current_day;
     document.getElementById('date-display').textContent = data.current_day;
     const status = await fetch('/simulation/status').then(r => r.json());
     document.getElementById('day-counter').textContent = `Day ${status.day_index + 1} of ${status.total_days}`;

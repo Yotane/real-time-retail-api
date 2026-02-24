@@ -83,6 +83,10 @@ def simulation_reset():
     simulation.is_complete    = False
     return {"status": "reset"}
 
+@app.post("/simulation/day-total")
+def set_day_total(payload: dict):
+    simulation.set_day_total(payload["total"])
+    return {"status": "ok"}
 
 # ─── Real-Time SSE ─────────────────────────────────────────────────────────
 
@@ -97,18 +101,44 @@ def stream_page():
 
 @app.get("/stream/events")
 async def stream_events():
-    """SSE endpoint — pushes Kafka consumer events to the browser."""
-    from kafka.consumer.consumer import latest_events
+    """SSE endpoint — tails kafka_events table and pushes to browser."""
 
     async def event_generator():
-        last_index = 0
+        last_id = 0
         while True:
-            current_length = len(latest_events)
-            if current_length > last_index:
-                for event in latest_events[last_index:current_length]:
+            try:
+                conn   = get_connection()
+                cursor = conn.cursor(dictionary=True)
+                cursor.execute("""
+                    SELECT id, store_id, product_id, date,
+                           units_sold, price, discount,
+                           is_holiday_promo, weather, received_at
+                    FROM kafka_events
+                    WHERE id > %s
+                    ORDER BY id ASC
+                    LIMIT 50
+                """, (last_id,))
+                rows = cursor.fetchall()
+                cursor.close()
+                conn.close()
+
+                for row in rows:
+                    last_id = row["id"]
+                    event = {}
+                    for k, v in row.items():
+                        if hasattr(v, 'isoformat'):      # date / datetime
+                            event[k] = str(v)
+                        elif hasattr(v, '__float__'):    # Decimal
+                            event[k] = float(v)
+                        else:
+                            event[k] = v
+                    event["day_total"] = simulation.day_total
                     yield f"data: {json.dumps(event)}\n\n"
-                last_index = current_length
-            await asyncio.sleep(0.05)
+
+            except Exception as e:
+                log.warning(f"SSE DB error: {e}")
+
+            await asyncio.sleep(0.1)
 
     return StreamingResponse(
         event_generator(),

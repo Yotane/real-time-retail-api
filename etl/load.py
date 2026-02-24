@@ -3,6 +3,7 @@ import sys
 import logging
 import pandas as pd
 import mysql.connector
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,6 +24,23 @@ def get_connection():
         database=os.getenv("MYSQL_DATABASE")
     )
 
+def get_connection_with_retry(retries=10, delay=5):
+    for attempt in range(retries):
+        try:
+            conn = mysql.connector.connect(
+                host=os.getenv("MYSQL_HOST", "localhost"),
+                port=int(os.getenv("MYSQL_PORT", 3306)),
+                user=os.getenv("MYSQL_USER"),
+                password=os.getenv("MYSQL_PASSWORD"),
+                database=os.getenv("MYSQL_DATABASE")
+            )
+            log.info("Connected to MySQL successfully")
+            return conn
+        except mysql.connector.Error as err:
+            log.warning(f"Attempt {attempt + 1}/{retries} failed: {err}")
+            if attempt < retries - 1:
+                time.sleep(delay)
+    raise Exception("Could not connect to MySQL after all retries")
 
 def load_csv(path: str) -> pd.DataFrame:
     log.info(f"Loading CSV from {path}")
@@ -126,6 +144,14 @@ def load_sales_facts(df: pd.DataFrame, conn) -> None:
                 inventory_level, units_sold, units_ordered,
                 demand_forecast, price, discount, competitor_pricing
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                inventory_level    = VALUES(inventory_level),
+                units_sold         = VALUES(units_sold),
+                units_ordered      = VALUES(units_ordered),
+                demand_forecast    = VALUES(demand_forecast),
+                price              = VALUES(price),
+                discount           = VALUES(discount),
+                competitor_pricing = VALUES(competitor_pricing)
         """, chunk)
         conn.commit()
         log.info(f"Inserted rows {i} to {i + len(chunk)}")
@@ -142,7 +168,7 @@ def run():
     conn = None
     cursor = None
     try:
-        conn = get_connection()
+        conn = get_connection_with_retry(retries=10, delay=5)
         run_schema(conn)
         df = load_csv(csv_path)
         load_stores(df, conn)
