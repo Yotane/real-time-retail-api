@@ -183,9 +183,87 @@ def demand_predict(store_id: str, product_id: str):
 
 @app.get("/price/sensitivity")
 def price_sensitivity(product_id: str):
-    """Price elasticity analysis."""
-    return {"status": "stub", "product_id": product_id}
+    """
+    Price elasticity analysis.
+    Calculates how much demand changes when price changes.
+    Elasticity < -1 means demand is elastic (sensitive to price).
+    Elasticity > -1 means demand is inelastic (not sensitive).
+    """
+    conn   = get_connection()
+    cursor = conn.cursor(dictionary=True)
 
+    cursor.execute("""
+        SELECT price, units_sold, discount, store_id
+        FROM sales_facts
+        WHERE product_id = %s AND price > 0
+        ORDER BY date ASC
+    """, (product_id,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No data found for product={product_id}"
+        )
+
+    import pandas as pd
+    import numpy as np
+
+    df = pd.DataFrame(rows)
+    df["price"]      = pd.to_numeric(df["price"],      errors="coerce")
+    df["units_sold"] = pd.to_numeric(df["units_sold"], errors="coerce")
+    df = df.dropna(subset=["price", "units_sold"])
+
+    # Price buckets — group by rounded price, get avg units sold
+    df["price_bucket"] = df["price"].round(0)
+    grouped = df.groupby("price_bucket")["units_sold"].mean().reset_index()
+    grouped = grouped.sort_values("price_bucket")
+
+    # Elasticity = % change in quantity / % change in price
+    if len(grouped) >= 2:
+        pct_change_price    = grouped["price_bucket"].pct_change().dropna()
+        pct_change_quantity = grouped["units_sold"].pct_change().dropna()
+        valid = pct_change_price[pct_change_price != 0]
+        if len(valid) > 0:
+            elasticity = float((pct_change_quantity / pct_change_price).mean())
+        else:
+            elasticity = 0.0
+    else:
+        elasticity = 0.0
+
+    # Interpretation
+    if elasticity < -1:
+        interpretation = "Elastic — customers are price sensitive. Lowering price increases revenue."
+    elif -1 <= elasticity < 0:
+        interpretation = "Inelastic — customers are not very price sensitive. Price increases have little demand impact."
+    elif elasticity >= 0:
+        interpretation = "Positive correlation — higher price correlates with higher sales (possible premium/luxury effect)."
+    else:
+        interpretation = "Insufficient price variation to determine elasticity."
+
+    # Correlation coefficient
+    correlation = float(df["price"].corr(df["units_sold"]))
+
+    # Price range breakdown
+    price_brackets = grouped.rename(columns={
+        "price_bucket": "price_point",
+        "units_sold":   "avg_units_sold"
+    }).round(2).to_dict(orient="records")
+
+    return {
+        "product_id":       product_id,
+        "total_records":    len(df),
+        "price_range":      {"min": round(float(df["price"].min()), 2),
+                             "max": round(float(df["price"].max()), 2),
+                             "mean": round(float(df["price"].mean()), 2)},
+        "avg_units_sold":   round(float(df["units_sold"].mean()), 2),
+        "elasticity":       round(elasticity, 4),
+        "correlation":      round(correlation, 4),
+        "interpretation":   interpretation,
+        "price_brackets":   price_brackets[:10]
+    }
 
 @app.get("/promotions/simulate")
 def promotions_simulate(product_id: str, discount_pct: float):
