@@ -32,4 +32,3 @@ pytest-asyncio==0.23.6
 # Code quality
 ruff==0.4.4
 
-hhtpx==0.28.1
