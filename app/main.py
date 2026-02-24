@@ -106,18 +106,23 @@ async def stream_events():
     async def event_generator():
         last_id = 0
         while True:
+
+            if not simulation.current_day:
+                await asyncio.sleep(0.1)
+                continue
+
             try:
                 conn   = get_connection()
                 cursor = conn.cursor(dictionary=True)
                 cursor.execute("""
                     SELECT id, store_id, product_id, date,
-                           units_sold, price, discount,
-                           is_holiday_promo, weather, received_at
+                        units_sold, price, discount,
+                        is_holiday_promo, weather, received_at
                     FROM kafka_events
-                    WHERE id > %s
+                    WHERE id > %s AND date = %s
                     ORDER BY id ASC
                     LIMIT 50
-                """, (last_id,))
+                """, (last_id, simulation.current_day))
                 rows = cursor.fetchall()
                 cursor.close()
                 conn.close()
