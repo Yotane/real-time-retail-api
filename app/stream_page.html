@@ -139,7 +139,10 @@
 </head>
 <body>
 <h1>🛒 Retail Time Machine</h1>
-<p class="subtitle">Step through retail history day by day</p>
+<p class="subtitle">Step through retail history day by day — powered by Kafka</p>
+<p style="color:#664400;background:#1a1100;border:1px solid #332200;border-radius:6px;padding:10px 14px;font-size:0.78em;margin-bottom:20px;max-width:1200px;">
+  ⏳ <strong>First startup?</strong> Historical data initialization may take up to 60 seconds. If events go over 100, then it is not yet ready. If no events appear after clicking Next Day, wait ~1 minute then click <strong>↺ Reset</strong> followed by <strong>▶ Next Day</strong>.
+</p>
 
 <div class="dashboard">
 
@@ -186,7 +189,8 @@
     <div id="feed">
       <div class="empty-state">
         No events yet.<br>
-        Click <strong>▶ Next Day</strong> to start streaming.
+        Click <strong>▶ Next Day</strong> to start streaming.<br><br>
+        <span style="color:#664400;font-size:0.85em;">⏳ First startup? Wait ~60s for initialization. If events go over 100, then it is not yet ready.<br>If nothing happens, click ↺ Reset then ▶ Next Day.</span>
       </div>
     </div>
     <div class="status-bar" id="status-bar">waiting...</div>
@@ -222,7 +226,6 @@
   let currentDay = null;
 
   function appendEvent(event) {
-    // Only show events for the current simulation day
     if (currentDay && event.date !== currentDay) return;
     
     const feed = document.getElementById('feed');
