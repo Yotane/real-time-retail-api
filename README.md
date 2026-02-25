@@ -244,7 +244,6 @@ docker compose up
 ## Future Roadmap
 
 - **CI/CD:** GitHub Actions pipeline for automated testing and image builds
-- **Tests:** pytest suite for ETL, API endpoints, and simulation logic
 - **Monitoring:** Prometheus + Grafana for Kafka lag, event throughput, API latency
 - **Frontend:** Chart.js visualizations for revenue trends, top products, weather correlation
 - **Multi-step forecast:** Rolling forward projection instead of static mean
