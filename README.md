@@ -256,7 +256,7 @@ Evaluates each combination on a held-out test set (last 20% of history) using RM
 }
 ```
 
-Optuna found that a 4-day window minimizes RMSE for S001/P0001 — meaning this product's demand is best predicted by recent sales rather than long-term averages. Different store/product pairs converge to different optimal windows (S003/P0001 converges to 22 days), which is the core value of running per-combination optimization.
+Optuna found that a 4-day window minimizes RMSE for S001/P0001 and that it will sell an average of 66 units per day in the next seven days. This means that this product's demand is best predicted by recent sales rather than long-term averages. Different store/product pairs converge to different optimal windows (S003/P0001 converges to 22 days), which is the core value of running per-combination optimization.
 
 ### Price Sensitivity Analysis
 `GET /price/sensitivity?product_id=P0002`
