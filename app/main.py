@@ -160,6 +160,7 @@ async def stream_events():
 
 @app.get("/sales/recent")
 def sales_recent(limit: int = 20):
+    """Most recent Kafka-ingested events."""
     conn   = get_connection()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
@@ -176,9 +177,68 @@ def sales_recent(limit: int = 20):
 
 
 @app.get("/demand/predict")
-def demand_predict(store_id: str, product_id: str):
-    """Moving average demand forecast for a product/store."""
-    return {"status": "stub", "store_id": store_id, "product_id": product_id}
+def demand_predict(store_id: str, product_id: str, days: int = 7):
+    """
+    Demand forecast using moving average on historical sales_facts.
+    Returns last N days actual + 7-day forward forecast.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # Pull historical daily sales for this store+product
+    cursor.execute("""
+        SELECT date, units_sold
+        FROM sales_facts
+        WHERE store_id = %s AND product_id = %s
+        ORDER BY date ASC
+    """, (store_id, product_id))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No data found for store={store_id} product={product_id}"
+        )
+
+    import pandas as pd
+    df = pd.DataFrame(rows)
+    df["date"]       = pd.to_datetime(df["date"])
+    df["units_sold"] = pd.to_numeric(df["units_sold"], errors="coerce").fillna(0)
+    df = df.sort_values("date")
+
+    # 7-day moving average
+    window   = min(days, len(df))
+    ma       = df["units_sold"].rolling(window=window, min_periods=1).mean()
+    forecast = round(float(ma.iloc[-1]), 2)
+
+    # Trend: compare last 7 days avg vs previous 7 days avg
+    if len(df) >= 14:
+        recent_avg   = df["units_sold"].iloc[-7:].mean()
+        previous_avg = df["units_sold"].iloc[-14:-7].mean()
+        trend_pct    = round(((recent_avg - previous_avg) / (previous_avg + 1e-9)) * 100, 1)
+        trend        = "up" if trend_pct > 2 else "down" if trend_pct < -2 else "stable"
+    else:
+        trend_pct = 0.0
+        trend     = "insufficient data"
+
+    # Forward forecast: next 7 days same moving average
+    forward = [{"day": i + 1, "forecast_units": forecast} for i in range(7)]
+
+    return {
+        "store_id":        store_id,
+        "product_id":      product_id,
+        "total_history_days": len(df),
+        "moving_avg_window":  window,
+        "forecast_next_day":  forecast,
+        "trend":           trend,
+        "trend_pct":       trend_pct,
+        "7_day_forward":   forward,
+        "last_5_actuals":  df[["date", "units_sold"]].tail(5).assign(
+            date=lambda x: x["date"].dt.strftime("%Y-%m-%d")
+        ).to_dict(orient="records")
+    }
 
 
 @app.get("/price/sensitivity")
@@ -265,7 +325,159 @@ def price_sensitivity(product_id: str):
         "price_brackets":   price_brackets[:10]
     }
 
+
 @app.get("/promotions/simulate")
 def promotions_simulate(product_id: str, discount_pct: float):
-    """Promotion effect simulation."""
-    return {"status": "stub", "product_id": product_id, "discount_pct": discount_pct}
+    """
+    Simulate the effect of a promotion/discount on a product.
+    Compares actual sales on promo days vs non-promo days.
+    Projects expected uplift for a given discount percentage.
+    """
+    conn   = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT sf.units_sold, sf.price, sf.discount,
+               c.is_holiday_promo
+        FROM sales_facts sf
+        JOIN calendar c ON sf.date = c.date
+        WHERE sf.product_id = %s
+    """, (product_id,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No data found for product={product_id}"
+        )
+
+    import pandas as pd
+
+    df = pd.DataFrame(rows)
+    df["units_sold"]     = pd.to_numeric(df["units_sold"],     errors="coerce")
+    df["price"]          = pd.to_numeric(df["price"],          errors="coerce")
+    df["discount"]       = pd.to_numeric(df["discount"],       errors="coerce")
+    df["is_holiday_promo"] = df["is_holiday_promo"].astype(int)
+
+    promo     = df[df["is_holiday_promo"] == 1]["units_sold"]
+    non_promo = df[df["is_holiday_promo"] == 0]["units_sold"]
+
+    avg_promo     = float(promo.mean())     if len(promo)     > 0 else 0.0
+    avg_non_promo = float(non_promo.mean()) if len(non_promo) > 0 else 0.0
+
+    # Historical uplift from actual promo days
+    if avg_non_promo > 0:
+        historical_uplift_pct = round(((avg_promo - avg_non_promo) / avg_non_promo) * 100, 1)
+    else:
+        historical_uplift_pct = 0.0
+
+    # Discount breakdown — how much uplift per discount tier
+    discount_groups = df.groupby("discount")["units_sold"].mean().reset_index()
+    discount_groups = discount_groups.sort_values("discount")
+    discount_effect = discount_groups.rename(columns={
+        "discount":   "discount_pct",
+        "units_sold": "avg_units_sold"
+    }).round(2).to_dict(orient="records")
+
+    # Simulate the requested discount_pct
+    # Find closest historical discount tier to interpolate
+    df_with_discount = df[df["discount"] > 0]
+    if len(df_with_discount) > 0:
+        closest_tier = discount_groups.iloc[
+            (discount_groups["discount"] - discount_pct).abs().argmin()
+        ]
+        projected_units = round(float(closest_tier["units_sold"]), 2)
+    else:
+        # Fall back to applying historical uplift linearly
+        scale           = discount_pct / 10.0
+        projected_units = round(avg_non_promo * (1 + (historical_uplift_pct / 100) * scale), 2)
+
+    projected_uplift_pct = round(
+        ((projected_units - avg_non_promo) / (avg_non_promo + 1e-9)) * 100, 1
+    ) if avg_non_promo > 0 else 0.0
+
+    return {
+        "product_id":              product_id,
+        "simulated_discount_pct":  discount_pct,
+        "baseline_avg_units":      round(avg_non_promo, 2),
+        "promo_avg_units":         round(avg_promo, 2),
+        "historical_uplift_pct":   historical_uplift_pct,
+        "projected_units":         projected_units,
+        "projected_uplift_pct":    projected_uplift_pct,
+        "total_promo_days":        len(promo),
+        "total_non_promo_days":    len(non_promo),
+        "discount_effect_by_tier": discount_effect,
+        "recommendation": (
+            f"A {discount_pct}% discount is projected to increase daily sales "
+            f"from {round(avg_non_promo, 1)} to {projected_units} units "
+            f"({projected_uplift_pct:+.1f}% uplift)."
+        )
+    }
+
+
+@app.get("/metrics")
+def metrics():
+    """
+    System health and performance metrics.
+    Kafka consumer lag, ingestion rate, per-store totals.
+    """
+    from kafka.consumer.consumer import latest_events
+
+    conn   = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # Total events ingested
+    cursor.execute("SELECT COUNT(*) as total FROM kafka_events")
+    total_ingested = cursor.fetchone()["total"]
+
+    # Events in last 60 seconds
+    cursor.execute("""
+        SELECT COUNT(*) as recent
+        FROM kafka_events
+        WHERE received_at >= NOW() - INTERVAL 60 SECOND
+    """)
+    recent_count = cursor.fetchone()["recent"]
+
+    # Per-store totals
+    cursor.execute("""
+        SELECT store_id,
+               COUNT(*)        as total_events,
+               SUM(units_sold) as total_units,
+               SUM(units_sold * price) as total_revenue
+        FROM kafka_events
+        GROUP BY store_id
+        ORDER BY total_revenue DESC
+    """)
+    store_totals = cursor.fetchall()
+
+    # Top 5 products by units
+    cursor.execute("""
+        SELECT product_id,
+               SUM(units_sold) as total_units
+        FROM kafka_events
+        GROUP BY product_id
+        ORDER BY total_units DESC
+        LIMIT 5
+    """)
+    top_products = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return {
+        "kafka": {
+            "in_memory_buffer":   len(latest_events),
+            "buffer_capacity":    500,
+            "buffer_pct_full":    round(len(latest_events) / 500 * 100, 1)
+        },
+        "ingestion": {
+            "total_events_stored":    total_ingested,
+            "events_last_60s":        recent_count,
+            "events_per_minute":      recent_count
+        },
+        "simulation": simulation.to_dict(),
+        "store_totals":  [dict(r) for r in store_totals],
+        "top_5_products": [dict(r) for r in top_products]
+    }
