@@ -258,6 +258,50 @@ Evaluates each combination on a held-out test set (last 20% of history) using RM
 
 Optuna found that a 4-day window minimizes RMSE for S001/P0001 and that it will sell an average of 66 units per day in the next seven days. This means that this product's demand is best predicted by recent sales rather than long-term averages. Different store/product pairs converge to different optimal windows (S003/P0001 converges to 22 days), which is the core value of running per-combination optimization.
 
+### Recent Kafka Events
+`GET /sales/recent?limit=5`
+
+Live transactions written by the Kafka consumer as they arrive. Each record represents a sale event that traveled through the full pipeline: producer fetched it from MySQL, published it to the Kafka topic, consumer received it and persisted it, SSE endpoint picked it up and pushed it to the browser in real time.
+```json
+{
+  "events": [
+    {
+      "store_id": "S005",
+      "product_id": "P0009",
+      "date": "2022-01-03",
+      "units_sold": 349,
+      "price": 52.72,
+      "discount": 10,
+      "is_holiday_promo": 0,
+      "weather": "Rainy",
+      "received_at": "2026-02-25T09:11:31"
+    },
+    {
+      "store_id": "S005",
+      "product_id": "P0004",
+      "date": "2022-01-03",
+      "units_sold": 351,
+      "price": 59.76,
+      "discount": 5,
+      "is_holiday_promo": 0,
+      "weather": "Rainy",
+      "received_at": "2026-02-25T09:11:30"
+    },
+    {
+      "store_id": "S004",
+      "product_id": "P0008",
+      "date": "2022-01-03",
+      "units_sold": 209,
+      "price": 63.10,
+      "discount": 10,
+      "is_holiday_promo": 0,
+      "weather": "Rainy",
+      "received_at": "2026-02-25T09:11:30"
+    }
+  ]
+}
+```
+
 ### Price Sensitivity Analysis
 `GET /price/sensitivity?product_id=P0002`
 ```json
@@ -278,7 +322,7 @@ Optuna found that a 4-day window minimizes RMSE for S001/P0001 and that it will 
 }
 ```
 
-Elasticity of 1.20 with near-zero correlation (-0.016) indicates P0002 behaves as a Veblen-type product in this dataset — demand does not drop with price increases. This kind of insight would flag P0002 as a candidate for premium pricing strategy.
+Elasticity of 1.20 with near-zero correlation (-0.016) indicates P0002 behaves as a Veblen-type product in this dataset. This type of product is where its demand does not drop with price increases. This kind of insight would flag P0002 as a candidate for premium pricing strategy.
 
 ### Promotion Simulation
 `GET /promotions/simulate?product_id=P0001&discount_pct=70`
@@ -304,9 +348,9 @@ Elasticity of 1.20 with near-zero correlation (-0.016) indicates P0002 behaves a
 }
 ```
 
-The discount effect tiers show diminishing returns beyond 10% — the largest unit uplift occurs at the 10% tier (141.61 avg units), with 15% and 20% performing slightly lower. This suggests P0001 does not benefit meaningfully from deep discounting, which would be an actionable finding for a retail pricing team.
+The discount effect tiers show diminishing returns beyond 10%, the largest unit uplift occurs at the 10% tier (141.61 avg units), with 15% and 20% performing slightly lower. This suggests P0001 does not benefit meaningfully from deep discounting, which would be an actionable finding for a retail pricing team.
 
-Different store/product combinations converge to different optimal windows — S001/P0001 performs best with a short 4-day window (reactive to recent spikes), while S003/P0001 converges to 22 days (smoother long-term average). Optuna identifies this automatically per combination rather than using a one-size-fits-all window.
+Different store/product combinations converge to different optimal windows. S001/P0001 performs best with a short 4-day window (reactive to recent spikes), while S003/P0001 converges to 22 days (smoother long-term average). Optuna identifies this automatically per combination rather than using a one-size-fits-all window.
 
 ## Stopping and Restarting
 
