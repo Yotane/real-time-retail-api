@@ -481,3 +481,80 @@ def metrics():
         "store_totals":  [dict(r) for r in store_totals],
         "top_5_products": [dict(r) for r in top_products]
     }
+
+# ─── Optuna Optimization Endpoints ───────────────────────────────────────
+
+@app.post("/optimize/demand")
+def optimize_demand(store_id: str, product_id: str, n_trials: int = 20):
+    """
+    Run Optuna to find best forecasting parameters,
+    then immediately apply them to produce an optimized demand forecast.
+    """
+    from app.optimizer import run_optimization
+
+    if n_trials < 5 or n_trials > 50:
+        raise HTTPException(status_code=400, detail="n_trials must be between 5 and 50")
+
+    result = run_optimization(store_id, product_id, n_trials)
+
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+
+    return result
+
+
+@app.get("/optimize/history")
+def optimize_history(product_id: str = None, store_id: str = None, limit: int = 200):
+    """All past Optuna trials stored in MySQL."""
+    conn   = get_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    if product_id and store_id:
+        cursor.execute("""
+            SELECT * FROM optuna_trials
+            WHERE product_id = %s AND store_id = %s
+            ORDER BY completed_at DESC LIMIT %s
+        """, (product_id, store_id, limit))
+    elif product_id:
+        cursor.execute("""
+            SELECT * FROM optuna_trials
+            WHERE product_id = %s
+            ORDER BY completed_at DESC LIMIT %s
+        """, (product_id, limit))
+    else:
+        cursor.execute("""
+            SELECT * FROM optuna_trials
+            ORDER BY completed_at DESC LIMIT %s
+        """, (limit,))
+
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if not rows:
+        return {"trials": [], "message": "No runs yet. POST to /optimize/demand first."}
+
+    def serialize(row):
+        result = {}
+        for k, v in row.items():
+            if hasattr(v, 'isoformat'):
+                result[k] = str(v)
+            elif hasattr(v, '__float__'):
+                result[k] = float(v)
+            else:
+                result[k] = v
+        return result
+
+    serialized = [serialize(r) for r in rows]
+    best = min(serialized, key=lambda r: float(r["rmse"] or 999))
+
+    return {
+        "total_trials": len(serialized),
+        "best_trial": {
+            "rmse":         best["rmse"],
+            "window":       best["_window"],
+            "min_periods":  best["min_periods"],
+            "trend_window": best["trend_window"]
+        },
+        "trials": serialized
+    }
