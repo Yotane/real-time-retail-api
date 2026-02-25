@@ -32,3 +32,5 @@ pytest-asyncio==0.23.6
 # Code quality
 ruff==0.4.4
 
+# Optuna
+optuna==3.6.1

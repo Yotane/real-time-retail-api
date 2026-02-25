@@ -54,3 +54,19 @@ CREATE TABLE IF NOT EXISTS kafka_events (
     INDEX idx_kafka_product (product_id),
     INDEX idx_kafka_date    (date)
 );
+USE retaildb;
+CREATE TABLE IF NOT EXISTS optuna_trials (
+    id              BIGINT       PRIMARY KEY AUTO_INCREMENT,
+    study_name      VARCHAR(100) NOT NULL,
+    trial_number    INT          NOT NULL,
+    store_id        VARCHAR(10),
+    product_id      VARCHAR(10),
+    _window          INT,
+    min_periods     INT,
+    trend_window    INT,
+    rmse            DECIMAL(10,4),
+    status          VARCHAR(20)  DEFAULT 'complete',
+    completed_at    TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_study   (study_name),
+    INDEX idx_product (product_id)
+);
