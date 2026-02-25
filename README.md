@@ -1,4 +1,4 @@
-# Real-Time Retail API
+# Real-Time Retail API with Optuna Forecasting
 **Data Engineering portfolio project demonstrating event-driven architecture, real-time streaming, and ML-powered demand forecasting.**
 
 A Kafka-backed retail analytics pipeline with a day-by-day time simulation. Step through 731 days of retail history clicking "Next Day" in a browser where each click triggers a Kafka event burst, streams transactions live through the pipeline, and updates real-time analytics.
