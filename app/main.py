@@ -177,30 +177,55 @@ def sales_recent(limit: int = 20):
 
 
 @app.get("/demand/predict")
-def demand_predict(store_id: str, product_id: str, days: int = 7):
+def demand_predict(store_id: str, product_id: str, days: int = 7, day: int = None):
     """
     Demand forecast using moving average on historical sales_facts.
-    Returns last N days actual + 7-day forward forecast.
+    Use 'day' (1-731) to scope analysis up to that simulation day.
+    Defaults to current simulation day if running, otherwise all history.
     """
+
+    if day is not None:
+        conn   = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT date FROM sales_facts
+            ORDER BY date ASC LIMIT 1 OFFSET %s
+        """, (day - 1,))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=400, detail=f"day {day} is out of range")
+        cutoff = str(row[0])
+    elif simulation.current_day:
+        cutoff = simulation.current_day
+    else:
+        cutoff = None
+
     conn   = get_connection()
     cursor = conn.cursor(dictionary=True)
 
-    # Pull historical daily sales for this store+product
-    cursor.execute("""
-        SELECT date, units_sold
-        FROM sales_facts
-        WHERE store_id = %s AND product_id = %s
-        ORDER BY date ASC
-    """, (store_id, product_id))
+    if cutoff:
+        cursor.execute("""
+            SELECT date, units_sold
+            FROM sales_facts
+            WHERE store_id = %s AND product_id = %s AND date <= %s
+            ORDER BY date ASC
+        """, (store_id, product_id, cutoff))
+    else:
+        cursor.execute("""
+            SELECT date, units_sold
+            FROM sales_facts
+            WHERE store_id = %s AND product_id = %s
+            ORDER BY date ASC
+        """, (store_id, product_id))
+
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
 
     if not rows:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No data found for store={store_id} product={product_id}"
-        )
+        raise HTTPException(status_code=404, detail=f"No data found for store={store_id} product={product_id}")
 
     import pandas as pd
     df = pd.DataFrame(rows)
@@ -208,12 +233,10 @@ def demand_predict(store_id: str, product_id: str, days: int = 7):
     df["units_sold"] = pd.to_numeric(df["units_sold"], errors="coerce").fillna(0)
     df = df.sort_values("date")
 
-    # 7-day moving average
     window   = min(days, len(df))
     ma       = df["units_sold"].rolling(window=window, min_periods=1).mean()
     forecast = round(float(ma.iloc[-1]), 2)
 
-    # Trend: compare last 7 days avg vs previous 7 days avg
     if len(df) >= 14:
         recent_avg   = df["units_sold"].iloc[-7:].mean()
         previous_avg = df["units_sold"].iloc[-14:-7].mean()
@@ -223,50 +246,73 @@ def demand_predict(store_id: str, product_id: str, days: int = 7):
         trend_pct = 0.0
         trend     = "insufficient data"
 
-    # Forward forecast: next 7 days same moving average
     forward = [{"day": i + 1, "forecast_units": forecast} for i in range(7)]
 
     return {
-        "store_id":        store_id,
-        "product_id":      product_id,
+        "store_id":           store_id,
+        "product_id":         product_id,
+        "analysis_up_to_day": cutoff or "all",
         "total_history_days": len(df),
         "moving_avg_window":  window,
         "forecast_next_day":  forecast,
-        "trend":           trend,
-        "trend_pct":       trend_pct,
-        "7_day_forward":   forward,
-        "last_5_actuals":  df[["date", "units_sold"]].tail(5).assign(
+        "trend":              trend,
+        "trend_pct":          trend_pct,
+        "7_day_forward":      forward,
+        "last_5_actuals":     df[["date", "units_sold"]].tail(5).assign(
             date=lambda x: x["date"].dt.strftime("%Y-%m-%d")
         ).to_dict(orient="records")
     }
 
 
 @app.get("/price/sensitivity")
-def price_sensitivity(product_id: str):
+def price_sensitivity(product_id: str, day: int = None):
     """
     Price elasticity analysis.
-    Calculates how much demand changes when price changes.
-    Elasticity < -1 means demand is elastic (sensitive to price).
-    Elasticity > -1 means demand is inelastic (not sensitive).
+    Use 'day' (1-731) to scope analysis up to that simulation day.
+    Defaults to current simulation day if running, otherwise all history.
     """
+    if day is not None:
+        conn   = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT date FROM sales_facts
+            ORDER BY date ASC LIMIT 1 OFFSET %s
+        """, (day - 1,))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=400, detail=f"day {day} is out of range")
+        cutoff = str(row[0])
+    elif simulation.current_day:
+        cutoff = simulation.current_day
+    else:
+        cutoff = None
+
     conn   = get_connection()
     cursor = conn.cursor(dictionary=True)
 
-    cursor.execute("""
-        SELECT price, units_sold, discount, store_id
-        FROM sales_facts
-        WHERE product_id = %s AND price > 0
-        ORDER BY date ASC
-    """, (product_id,))
+    if cutoff:
+        cursor.execute("""
+            SELECT price, units_sold, discount, store_id
+            FROM sales_facts
+            WHERE product_id = %s AND price > 0 AND date <= %s
+            ORDER BY date ASC
+        """, (product_id, cutoff))
+    else:
+        cursor.execute("""
+            SELECT price, units_sold, discount, store_id
+            FROM sales_facts
+            WHERE product_id = %s AND price > 0
+            ORDER BY date ASC
+        """, (product_id,))
+
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
 
     if not rows:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No data found for product={product_id}"
-        )
+        raise HTTPException(status_code=404, detail=f"No data found for product={product_id}")
 
     import pandas as pd
     import numpy as np
@@ -276,24 +322,18 @@ def price_sensitivity(product_id: str):
     df["units_sold"] = pd.to_numeric(df["units_sold"], errors="coerce")
     df = df.dropna(subset=["price", "units_sold"])
 
-    # Price buckets — group by rounded price, get avg units sold
     df["price_bucket"] = df["price"].round(0)
     grouped = df.groupby("price_bucket")["units_sold"].mean().reset_index()
     grouped = grouped.sort_values("price_bucket")
 
-    # Elasticity = % change in quantity / % change in price
     if len(grouped) >= 2:
         pct_change_price    = grouped["price_bucket"].pct_change().dropna()
         pct_change_quantity = grouped["units_sold"].pct_change().dropna()
         valid = pct_change_price[pct_change_price != 0]
-        if len(valid) > 0:
-            elasticity = float((pct_change_quantity / pct_change_price).mean())
-        else:
-            elasticity = 0.0
+        elasticity = float((pct_change_quantity / pct_change_price).mean()) if len(valid) > 0 else 0.0
     else:
         elasticity = 0.0
 
-    # Interpretation
     if elasticity < -1:
         interpretation = "Elastic — customers are price sensitive. Lowering price increases revenue."
     elif -1 <= elasticity < 0:
@@ -303,10 +343,7 @@ def price_sensitivity(product_id: str):
     else:
         interpretation = "Insufficient price variation to determine elasticity."
 
-    # Correlation coefficient
-    correlation = float(df["price"].corr(df["units_sold"]))
-
-    # Price range breakdown
+    correlation    = float(df["price"].corr(df["units_sold"]))
     price_brackets = grouped.rename(columns={
         "price_bucket": "price_point",
         "units_sold":   "avg_units_sold"
@@ -314,10 +351,13 @@ def price_sensitivity(product_id: str):
 
     return {
         "product_id":       product_id,
+        "analysis_up_to_day": cutoff or "all",
         "total_records":    len(df),
-        "price_range":      {"min": round(float(df["price"].min()), 2),
-                             "max": round(float(df["price"].max()), 2),
-                             "mean": round(float(df["price"].mean()), 2)},
+        "price_range":      {
+            "min":  round(float(df["price"].min()), 2),
+            "max":  round(float(df["price"].max()), 2),
+            "mean": round(float(df["price"].mean()), 2)
+        },
         "avg_units_sold":   round(float(df["units_sold"].mean()), 2),
         "elasticity":       round(elasticity, 4),
         "correlation":      round(correlation, 4),
@@ -327,38 +367,63 @@ def price_sensitivity(product_id: str):
 
 
 @app.get("/promotions/simulate")
-def promotions_simulate(product_id: str, discount_pct: float):
+def promotions_simulate(product_id: str, discount_pct: float, day: int = None):
     """
     Simulate the effect of a promotion/discount on a product.
-    Compares actual sales on promo days vs non-promo days.
-    Projects expected uplift for a given discount percentage.
+    Use 'day' (1-731) to scope analysis up to that simulation day.
+    Defaults to current simulation day if running, otherwise all history.
     """
+    if day is not None:
+        conn   = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT date FROM sales_facts
+            ORDER BY date ASC LIMIT 1 OFFSET %s
+        """, (day - 1,))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=400, detail=f"day {day} is out of range")
+        cutoff = str(row[0])
+    elif simulation.current_day:
+        cutoff = simulation.current_day
+    else:
+        cutoff = None
+
     conn   = get_connection()
     cursor = conn.cursor(dictionary=True)
 
-    cursor.execute("""
-        SELECT sf.units_sold, sf.price, sf.discount,
-               c.is_holiday_promo
-        FROM sales_facts sf
-        JOIN calendar c ON sf.date = c.date
-        WHERE sf.product_id = %s
-    """, (product_id,))
+    if cutoff:
+        cursor.execute("""
+            SELECT sf.units_sold, sf.price, sf.discount,
+                   c.is_holiday_promo
+            FROM sales_facts sf
+            JOIN calendar c ON sf.date = c.date
+            WHERE sf.product_id = %s AND sf.date <= %s
+        """, (product_id, cutoff))
+    else:
+        cursor.execute("""
+            SELECT sf.units_sold, sf.price, sf.discount,
+                   c.is_holiday_promo
+            FROM sales_facts sf
+            JOIN calendar c ON sf.date = c.date
+            WHERE sf.product_id = %s
+        """, (product_id,))
+
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
 
     if not rows:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No data found for product={product_id}"
-        )
+        raise HTTPException(status_code=404, detail=f"No data found for product={product_id}")
 
     import pandas as pd
 
     df = pd.DataFrame(rows)
-    df["units_sold"]     = pd.to_numeric(df["units_sold"],     errors="coerce")
-    df["price"]          = pd.to_numeric(df["price"],          errors="coerce")
-    df["discount"]       = pd.to_numeric(df["discount"],       errors="coerce")
+    df["units_sold"]       = pd.to_numeric(df["units_sold"],       errors="coerce")
+    df["price"]            = pd.to_numeric(df["price"],            errors="coerce")
+    df["discount"]         = pd.to_numeric(df["discount"],         errors="coerce")
     df["is_holiday_promo"] = df["is_holiday_promo"].astype(int)
 
     promo     = df[df["is_holiday_promo"] == 1]["units_sold"]
@@ -367,13 +432,10 @@ def promotions_simulate(product_id: str, discount_pct: float):
     avg_promo     = float(promo.mean())     if len(promo)     > 0 else 0.0
     avg_non_promo = float(non_promo.mean()) if len(non_promo) > 0 else 0.0
 
-    # Historical uplift from actual promo days
-    if avg_non_promo > 0:
-        historical_uplift_pct = round(((avg_promo - avg_non_promo) / avg_non_promo) * 100, 1)
-    else:
-        historical_uplift_pct = 0.0
+    historical_uplift_pct = round(
+        ((avg_promo - avg_non_promo) / avg_non_promo) * 100, 1
+    ) if avg_non_promo > 0 else 0.0
 
-    # Discount breakdown — how much uplift per discount tier
     discount_groups = df.groupby("discount")["units_sold"].mean().reset_index()
     discount_groups = discount_groups.sort_values("discount")
     discount_effect = discount_groups.rename(columns={
@@ -381,16 +443,13 @@ def promotions_simulate(product_id: str, discount_pct: float):
         "units_sold": "avg_units_sold"
     }).round(2).to_dict(orient="records")
 
-    # Simulate the requested discount_pct
-    # Find closest historical discount tier to interpolate
     df_with_discount = df[df["discount"] > 0]
     if len(df_with_discount) > 0:
-        closest_tier = discount_groups.iloc[
+        closest_tier    = discount_groups.iloc[
             (discount_groups["discount"] - discount_pct).abs().argmin()
         ]
         projected_units = round(float(closest_tier["units_sold"]), 2)
     else:
-        # Fall back to applying historical uplift linearly
         scale           = discount_pct / 10.0
         projected_units = round(avg_non_promo * (1 + (historical_uplift_pct / 100) * scale), 2)
 
@@ -400,6 +459,7 @@ def promotions_simulate(product_id: str, discount_pct: float):
 
     return {
         "product_id":              product_id,
+        "analysis_up_to_day":      cutoff or "all",
         "simulated_discount_pct":  discount_pct,
         "baseline_avg_units":      round(avg_non_promo, 2),
         "promo_avg_units":         round(avg_promo, 2),
@@ -485,17 +545,37 @@ def metrics():
 # ─── Optuna Optimization Endpoints ───────────────────────────────────────
 
 @app.post("/optimize/demand")
-def optimize_demand(store_id: str, product_id: str, n_trials: int = 20):
+def optimize_demand(store_id: str, product_id: str, n_trials: int = 20, day: int = None):
     """
     Run Optuna to find best forecasting parameters,
     then immediately apply them to produce an optimized demand forecast.
+    Use 'day' (1-731) to scope analysis up to that simulation day.
+    Defaults to current simulation day if running, otherwise all history.
     """
     from app.optimizer import run_optimization
 
     if n_trials < 5 or n_trials > 50:
         raise HTTPException(status_code=400, detail="n_trials must be between 5 and 50")
 
-    result = run_optimization(store_id, product_id, n_trials)
+    if day is not None:
+        conn   = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT date FROM sales_facts
+            ORDER BY date ASC LIMIT 1 OFFSET %s
+        """, (day - 1,))
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if not row:
+            raise HTTPException(status_code=400, detail=f"day {day} is out of range")
+        cutoff = str(row[0])
+    elif simulation.current_day:
+        cutoff = simulation.current_day
+    else:
+        cutoff = None
+
+    result = run_optimization(store_id, product_id, n_trials, cutoff)
 
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])

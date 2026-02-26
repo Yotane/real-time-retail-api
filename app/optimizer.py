@@ -20,15 +20,23 @@ def get_connection():
     )
 
 
-def fetch_sales_history(store_id: str, product_id: str) -> list:
+def fetch_sales_history(store_id: str, product_id: str, cutoff: str = None) -> list:
     conn   = get_connection()
     cursor = conn.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT date, units_sold
-        FROM sales_facts
-        WHERE store_id = %s AND product_id = %s
-        ORDER BY date ASC
-    """, (store_id, product_id))
+    if cutoff:
+        cursor.execute("""
+            SELECT date, units_sold
+            FROM sales_facts
+            WHERE store_id = %s AND product_id = %s AND date <= %s
+            ORDER BY date ASC
+        """, (store_id, product_id, cutoff))
+    else:
+        cursor.execute("""
+            SELECT date, units_sold
+            FROM sales_facts
+            WHERE store_id = %s AND product_id = %s
+            ORDER BY date ASC
+        """, (store_id, product_id))
     rows = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -68,7 +76,7 @@ def save_trial(conn, study_name, trial_number, store_id, product_id,
     cursor.close()
 
 
-def run_optimization(store_id: str, product_id: str, n_trials: int = 20) -> dict:
+def run_optimization(store_id: str, product_id: str, n_trials: int = 20, cutoff: str = None) -> dict:
     """
     1. Run Optuna to find best forecasting parameters.
     2. Apply those parameters to make an actual demand forecast.
@@ -77,7 +85,7 @@ def run_optimization(store_id: str, product_id: str, n_trials: int = 20) -> dict
     study_name = f"{store_id}_{product_id}"
     conn       = get_connection()
 
-    rows = fetch_sales_history(store_id, product_id)
+    rows = fetch_sales_history(store_id, product_id, cutoff)
     if len(rows) < 20:
         conn.close()
         return {"error": f"Need 20+ days of data, got {len(rows)}."}
@@ -85,16 +93,15 @@ def run_optimization(store_id: str, product_id: str, n_trials: int = 20) -> dict
     series = [float(r["units_sold"]) for r in rows]
     dates  = [str(r["date"]) for r in rows]
 
-    # Train/test split — last 20% held out for evaluation
     split       = int(len(series) * 0.8)
     test_actual = series[split:]
 
     trial_log = []
 
     def objective(trial):
-        window       = trial.suggest_int("window",      3, 30)
-        min_periods  = trial.suggest_int("min_periods", 1,  7)
-        trend_window = trial.suggest_int("trend_window",5, 21)
+        window       = trial.suggest_int("window",       3, 30)
+        min_periods  = trial.suggest_int("min_periods",  1,  7)
+        trend_window = trial.suggest_int("trend_window", 5, 21)
 
         preds      = moving_average_forecast(series, window, min_periods)
         test_preds = preds[split:]
@@ -104,11 +111,11 @@ def run_optimization(store_id: str, product_id: str, n_trials: int = 20) -> dict
                    window, min_periods, trend_window, rmse)
 
         trial_log.append({
-            "trial":       trial.number + 1,
-            "window":      window,
-            "min_periods": min_periods,
-            "trend_window":trend_window,
-            "rmse":        round(rmse, 4)
+            "trial":        trial.number + 1,
+            "window":       window,
+            "min_periods":  min_periods,
+            "trend_window": trend_window,
+            "rmse":         round(rmse, 4)
         })
         return rmse
 
@@ -124,13 +131,10 @@ def run_optimization(store_id: str, product_id: str, n_trials: int = 20) -> dict
     best_w = best["window"]
     best_m = best["min_periods"]
 
-    # ── Apply best params to make the actual forecast ──────────────────
-    # Use full 730-day history with best window to predict next 7 days
-    all_preds   = moving_average_forecast(series, best_w, best_m)
+    all_preds    = moving_average_forecast(series, best_w, best_m)
     forecast_val = round(float(np.mean(series[-best_w:])), 2)
-    forward_7   = [{"day": i + 1, "forecast_units": forecast_val} for i in range(7)]
+    forward_7    = [{"day": i + 1, "forecast_units": forecast_val} for i in range(7)]
 
-    # Trend: last 7 days vs previous 7 days
     if len(series) >= 14:
         recent_avg   = float(np.mean(series[-7:]))
         previous_avg = float(np.mean(series[-14:-7]))
@@ -140,18 +144,16 @@ def run_optimization(store_id: str, product_id: str, n_trials: int = 20) -> dict
         trend_pct = 0.0
         trend     = "stable"
 
-    # Top 5 and bottom 5 trials by RMSE for summary
-    sorted_trials = sorted(trial_log, key=lambda x: x["rmse"])
-
-    first_rmse = trial_log[0]["rmse"]
-    best_rmse  = round(study.best_value, 4)
+    sorted_trials   = sorted(trial_log, key=lambda x: x["rmse"])
+    first_rmse      = trial_log[0]["rmse"]
+    best_rmse       = round(study.best_value, 4)
     improvement_pct = round((1 - best_rmse / (first_rmse + 1e-9)) * 100, 1)
 
     return {
-        "store_id":   store_id,
-        "product_id": product_id,
+        "store_id":           store_id,
+        "product_id":         product_id,
+        "analysis_up_to_day": cutoff or "all",
 
-        # ── Forecast using best params ──
         "forecast": {
             "method":            "moving_average_optimized",
             "window_used":       best_w,
@@ -166,7 +168,7 @@ def run_optimization(store_id: str, product_id: str, n_trials: int = 20) -> dict
                 for i in range(-5, 0)
             ]
         },
-                # ── Optimization summary ──
+
         "optimization": {
             "n_trials":         n_trials,
             "study_name":       study_name,
@@ -178,8 +180,8 @@ def run_optimization(store_id: str, product_id: str, n_trials: int = 20) -> dict
                 "min_periods":  best["min_periods"],
                 "trend_window": best["trend_window"]
             },
-            "top_5_trials":    sorted_trials[:5],
-            "worst_5_trials":  sorted_trials[-5:],
-            "all_trials":      sorted(trial_log, key=lambda x: x["trial"])
-        }
+            "top_5_trials":   sorted_trials[:5],
+            "worst_5_trials": sorted_trials[-5:],
+            "all_trials":     sorted(trial_log, key=lambda x: x["trial"])
+        },
     }
