@@ -10,7 +10,6 @@ This dataset provides synthetic yet realistic data for analyzing and forecasting
 The dataset is ideal for practicing machine learning tasks such as demand forecasting, dynamic pricing, and inventory optimization. It allows data scientists to explore time series forecasting techniques, study the impact of external factors like weather and holidays on sales, and build advanced models to optimize supply chain performance.
 
 ## Architecture
-
 ```text
 CSV (Kaggle) ──> ETL (Python) ──> MySQL Database
                                         │
@@ -33,7 +32,7 @@ Each "Next Day" click:
 
 - **Language:** Python 3.11
 - **API:** FastAPI + Uvicorn
-- **Real-time browser:** Server-Sent Events (SSE) — browser-native, no WebSockets
+- **Real-time browser:** Server-Sent Events (SSE), browser-native with no WebSockets needed
 - **Database:** MySQL 8.0, raw `mysql-connector-python`
 - **Streaming:** Kafka 7.6.0 (Confluent) KRaft mode
 - **Optimization:** Optuna 3.6.1 (TPE sampler, hyperparameter search)
@@ -45,9 +44,7 @@ Each "Next Day" click:
 - Docker Desktop
 - Docker Compose
 
-
 ## Installation
-
 ```bash
 # Clone repository
 git clone https://github.com/Yotane/real-time-retail-api.git
@@ -64,7 +61,6 @@ data/raw/retail_store_inventory.csv
 ```
 
 ## Running the Project
-
 ```bash
 # First run — builds images, loads data, starts all services
 docker compose up --build
@@ -93,7 +89,6 @@ http://localhost:8000/docs
 
 Integration tests run against live containers using `httpx`. Docker Compose must be running before executing tests.
 ```bash
-
 # Run all tests
 pytest tests/test_api.py -v
 
@@ -116,7 +111,6 @@ pytest tests/test_api.py::TestOptimizeDemand -v
 Note: `TestSimulationNextDay` tests auto-skip if the producer hasn't registered dates yet (`total_days == 0`). Run `docker compose up` and wait for the producer to start before running the full suite.
 
 ## Project Structure
-
 ```
 real-time-retail-api/
 ├── app/
@@ -150,12 +144,11 @@ real-time-retail-api/
 | `kafka` | Confluent Kafka 7.6.0 KRaft mode | 9092 |
 | `producer` | Polls simulation API, publishes daily events | — |
 | `consumer` | Reads Kafka, writes to `kafka_events` | — |
-| `api` | FastAPI — simulation control, SSE, analytics | 8000 |
+| `api` | FastAPI, simulation control, SSE, analytics | 8000 |
 
 Startup order: `mysql (healthy)` → `etl (completed)` → `kafka (healthy)` → `producer + consumer + api`
 
 ## Database Schema
-
 ```
 stores        → store_id (PK), region
 products      → product_id (PK), category
@@ -175,7 +168,7 @@ optuna_trials → id, study_name, trial_number, store_id, product_id,
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/stream/live` | Browser UI — day-by-day simulation |
+| `GET` | `/stream/live` | Browser UI, day-by-day simulation |
 | `GET` | `/stream/events` | SSE endpoint pushing live Kafka events |
 | `POST` | `/simulation/next-day` | Advance simulation by one day |
 | `POST` | `/simulation/reset` | Reset to day 0 |
@@ -187,15 +180,15 @@ optuna_trials → id, study_name, trial_number, store_id, product_id,
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/sales/recent` | Last N events from kafka_events |
-| `GET` | `/demand/predict` | Moving average demand forecast |
-| `GET` | `/price/sensitivity` | Price elasticity analysis |
-| `GET` | `/promotions/simulate` | Promotion effect simulation |
+| `GET` | `/demand/predict` | Moving average demand forecast scoped to simulation day |
+| `GET` | `/price/sensitivity` | Price elasticity analysis scoped to simulation day |
+| `GET` | `/promotions/simulate` | Promotion effect simulation scoped to simulation day |
 
 ### Optuna Optimization
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/optimize/demand` | Run Optuna → find best forecast params → return optimized forecast |
+| `POST` | `/optimize/demand` | Run Optuna, find best forecast params, return optimized forecast scoped to simulation day |
 | `GET` | `/optimize/history` | Query past optimization runs from MySQL |
 
 ## Demand Forecasting with Optuna
@@ -203,11 +196,13 @@ optuna_trials → id, study_name, trial_number, store_id, product_id,
 `POST /optimize/demand?store_id=S001&product_id=P0001&n_trials=20`
 
 Runs Bayesian hyperparameter search (TPE sampler) over:
-- `_window` — moving average lookback window (3–30 days)
-- `min_periods` — minimum data points required (1–7)
-- `trend_window` — trend detection window (5–21 days)
+- `window` — moving average lookback window (3-30 days)
+- `min_periods` — minimum data points required (1-7)
+- `trend_window` — trend detection window (5-21 days)
 
 Evaluates each combination on a held-out test set (last 20% of history) using RMSE. Returns the best parameters and immediately applies them to produce a 7-day forward forecast.
+
+All analytics and optimization endpoints accept an optional `day` parameter (1-731) to scope the analysis up to a specific simulation day. When not provided, the endpoints default to the current simulation day reflected in the stream live UI. This means the analytics stay in sync with wherever you are in the simulation. If you are on day 30, all endpoints automatically analyze only the first 30 days of data.
 
 ## Example API Responses
 
@@ -215,147 +210,162 @@ Evaluates each combination on a held-out test set (last 20% of history) using RM
 ![Live Stream Screenshot 1](assets/stream_live1.png)
 ![Live Stream Screenshot 2](assets/stream_live2.png)
 
+All responses below were captured at day 30 of the simulation. Since no `day` parameter was passed, the endpoints automatically used day 30 as the cutoff -- the default value pulled from the current simulation state.
+![Live Stream Screenshot 3](assets/stream_live3.png)
+
+### Recent Kafka Events
+`GET /sales/recent?limit=5`
+
+Live transactions written by the Kafka consumer as they arrive. Each record represents a sale event that traveled through the full pipeline: producer fetched it from MySQL, published it to the Kafka topic, consumer received it and persisted it, then the SSE endpoint picked it up and pushed it to the browser in real time.
+```json
+{
+  "events": [
+    {
+      "store_id": "S005",
+      "product_id": "P0011",
+      "date": "2022-01-30",
+      "units_sold": 216,
+      "price": 28.68,
+      "discount": 5,
+      "is_holiday_promo": 0,
+      "weather": "Snowy",
+      "received_at": "2026-02-26T11:42:37"
+    },
+    {
+      "store_id": "S005",
+      "product_id": "P0008",
+      "date": "2022-01-30",
+      "units_sold": 129,
+      "price": 33.49,
+      "discount": 5,
+      "is_holiday_promo": 0,
+      "weather": "Snowy",
+      "received_at": "2026-02-26T11:42:37"
+    },
+    {
+      "store_id": "S005",
+      "product_id": "P0017",
+      "date": "2022-01-30",
+      "units_sold": 440,
+      "price": 49.92,
+      "discount": 20,
+      "is_holiday_promo": 0,
+      "weather": "Snowy",
+      "received_at": "2026-02-26T11:42:37"
+    }
+  ]
+}
+```
+
 ### Optimized Demand Forecast
 `POST /optimize/demand?store_id=S001&product_id=P0001&n_trials=20`
 ```json
 {
   "store_id": "S001",
   "product_id": "P0001",
+  "analysis_up_to_day": "2022-01-30",
   "forecast": {
     "method": "moving_average_optimized",
-    "window_used": 4,
-    "history_days_used": 731,
-    "forecast_next_day": 66,
+    "window_used": 6,
+    "min_periods_used": 3,
+    "history_days_used": 30,
+    "forecast_next_day": 112.67,
     "trend": "down",
-    "trend_pct": -55.5,
+    "trend_pct": -40,
     "7_day_forward": [
-      {"day": 1, "forecast_units": 66},
-      {"day": 2, "forecast_units": 66},
-      {"day": 3, "forecast_units": 66},
-      {"day": 4, "forecast_units": 66},
-      {"day": 5, "forecast_units": 66},
-      {"day": 6, "forecast_units": 66},
-      {"day": 7, "forecast_units": 66}
+      {"day": 1, "forecast_units": 112.67},
+      {"day": 2, "forecast_units": 112.67},
+      {"day": 3, "forecast_units": 112.67},
+      {"day": 4, "forecast_units": 112.67},
+      {"day": 5, "forecast_units": 112.67},
+      {"day": 6, "forecast_units": 112.67},
+      {"day": 7, "forecast_units": 112.67}
     ],
     "last_5_actuals": [
-      {"date": "2023-12-28", "units_sold": 67},
-      {"date": "2023-12-29", "units_sold": 168},
-      {"date": "2023-12-30", "units_sold": 30},
-      {"date": "2023-12-31", "units_sold": 26},
-      {"date": "2024-01-01", "units_sold": 40}
+      {"date": "2022-01-26", "units_sold": 49},
+      {"date": "2022-01-27", "units_sold": 164},
+      {"date": "2022-01-28", "units_sold": 97},
+      {"date": "2022-01-29", "units_sold": 47},
+      {"date": "2022-01-30", "units_sold": 130}
     ]
   },
   "optimization": {
     "n_trials": 20,
-    "best_rmse": 109.6825,
-    "improvement_pct": 3.3,
-    "best_params": {"window": 4, "min_periods": 7, "trend_window": 15},
+    "study_name": "S001_P0001",
+    "first_trial_rmse": 60.1403,
+    "best_rmse": 52.8561,
+    "improvement_pct": 12.1,
+    "best_params": {"window": 6, "min_periods": 3, "trend_window": 11},
     "top_5_trials": [
-      {"trial": 3,  "window": 4,  "rmse": 109.6825},
-      {"trial": 11, "window": 3,  "rmse": 109.6825},
-      {"trial": 14, "window": 3,  "rmse": 109.6825},
-      {"trial": 18, "window": 30, "rmse": 111.5922}
+      {"trial": 8,  "window": 6,  "rmse": 52.8561},
+      {"trial": 5,  "window": 26, "rmse": 54.8448},
+      {"trial": 20, "window": 26, "rmse": 54.8448},
+      {"trial": 3,  "window": 4,  "rmse": 54.8793},
+      {"trial": 11, "window": 3,  "rmse": 54.8793}
     ]
   }
 }
 ```
 
-Optuna found that a 4-day window minimizes RMSE for S001/P0001 and that it will sell an average of 66 units per day in the next seven days. This means that this product's demand is best predicted by recent sales rather than long-term averages. Different store/product pairs converge to different optimal windows (S003/P0001 converges to 22 days), which is the core value of running per-combination optimization. 
-
-### Recent Kafka Events
-`GET /sales/recent?limit=5`
-
-Live transactions written by the Kafka consumer as they arrive. Each record represents a sale event that traveled through the full pipeline: producer fetched it from MySQL, published it to the Kafka topic, consumer received it and persisted it, SSE endpoint picked it up and pushed it to the browser in real time.
-```json
-{
-  "events": [
-    {
-      "store_id": "S005",
-      "product_id": "P0009",
-      "date": "2022-01-03",
-      "units_sold": 349,
-      "price": 52.72,
-      "discount": 10,
-      "is_holiday_promo": 0,
-      "weather": "Rainy",
-      "received_at": "2026-02-25T09:11:31"
-    },
-    {
-      "store_id": "S005",
-      "product_id": "P0004",
-      "date": "2022-01-03",
-      "units_sold": 351,
-      "price": 59.76,
-      "discount": 5,
-      "is_holiday_promo": 0,
-      "weather": "Rainy",
-      "received_at": "2026-02-25T09:11:30"
-    },
-    {
-      "store_id": "S004",
-      "product_id": "P0008",
-      "date": "2022-01-03",
-      "units_sold": 209,
-      "price": 63.10,
-      "discount": 10,
-      "is_holiday_promo": 0,
-      "weather": "Rainy",
-      "received_at": "2026-02-25T09:11:30"
-    }
-  ]
-}
-```
+Optuna tested 20 parameter combinations and found that a 6-day lookback window produces the most accurate forecast for S001/P0001, achieving a 12.1% improvement in error rate over the starting parameters. Based on the first 30 days of sales history, the model predicts an average of 112.67 units per day for the next 7 days. The overall trend is down at -40%, meaning recent sales have been lower than the earlier days in this window. Stepping further through the simulation and calling this endpoint again will update the forecast to reflect the additional history.
 
 ### Price Sensitivity Analysis
-`GET /price/sensitivity?product_id=P0002`
+`GET /price/sensitivity?product_id=P0001`
 ```json
 {
-  "product_id": "P0002",
-  "total_records": 3655,
-  "price_range": {"min": 10.01, "max": 99.99, "mean": 55.27},
-  "avg_units_sold": 133.47,
-  "elasticity": 1.2023,
-  "correlation": -0.0161,
-  "interpretation": "Positive correlation — higher price correlates with higher sales (possible premium/luxury effect).",
+  "product_id": "P0001",
+  "analysis_up_to_day": "2022-01-30",
+  "total_records": 150,
+  "price_range": {"min": 10.38, "max": 99.7, "mean": 54.45},
+  "avg_units_sold": 129.59,
+  "elasticity": 55.6312,
+  "correlation": 0.0545,
+  "interpretation": "Positive elasticity — higher price correlates with higher sales (possible premium/luxury effect).",
   "price_brackets": [
-    {"price_point": 10, "avg_units_sold": 153.92},
-    {"price_point": 14, "avg_units_sold": 158.76},
-    {"price_point": 16, "avg_units_sold": 188.06},
-    {"price_point": 19, "avg_units_sold": 149.68}
+    {"price_point": 10, "avg_units_sold": 79},
+    {"price_point": 11, "avg_units_sold": 97},
+    {"price_point": 12, "avg_units_sold": 102.5},
+    {"price_point": 13, "avg_units_sold": 390},
+    {"price_point": 15, "avg_units_sold": 375},
+    {"price_point": 16, "avg_units_sold": 210},
+    {"price_point": 17, "avg_units_sold": 90.5},
+    {"price_point": 18, "avg_units_sold": 189},
+    {"price_point": 19, "avg_units_sold": 368},
+    {"price_point": 20, "avg_units_sold": 145}
   ]
 }
 ```
 
-Elasticity of 1.20 with near-zero correlation (-0.016) indicates P0002 behaves as a Veblen-type product in this dataset. This type of product is where its demand does not drop with price increases. This kind of insight would flag P0002 as a candidate for premium pricing strategy.
+Across 150 records from the first 30 days, P0001 shows positive elasticity with a near-zero correlation of 0.055. This means higher prices are loosely associated with higher sales in this early window, which is characteristic of a premium product where customers associate price with quality. The average units sold is 129.59 per day across all price points. As you step further through the simulation, the elasticity calculation gets more data and the pattern will either strengthen or normalize.
 
 ### Promotion Simulation
 `GET /promotions/simulate?product_id=P0001&discount_pct=20`
 ```json
 {
   "product_id": "P0001",
+  "analysis_up_to_day": "2022-01-30",
   "simulated_discount_pct": 20,
-  "baseline_avg_units": 133.13,
-  "promo_avg_units": 139.7,
-  "historical_uplift_pct": 4.9,
-  "projected_units": 139.33,
-  "projected_uplift_pct": 4.7,
-  "total_promo_days": 1745,
-  "total_non_promo_days": 1910,
+  "baseline_avg_units": 130.89,
+  "promo_avg_units": 128.6,
+  "historical_uplift_pct": -1.8,
+  "projected_units": 139.31,
+  "projected_uplift_pct": 6.4,
+  "total_promo_days": 85,
+  "total_non_promo_days": 65,
   "discount_effect_by_tier": [
-    {"discount_pct": 0,  "avg_units_sold": 130.59},
-    {"discount_pct": 5,  "avg_units_sold": 130.85},
-    {"discount_pct": 10, "avg_units_sold": 141.61},
-    {"discount_pct": 15, "avg_units_sold": 138.35},
-    {"discount_pct": 20, "avg_units_sold": 139.33}
+    {"discount_pct": 0,  "avg_units_sold": 133.5},
+    {"discount_pct": 5,  "avg_units_sold": 117.48},
+    {"discount_pct": 10, "avg_units_sold": 133.88},
+    {"discount_pct": 15, "avg_units_sold": 122.49},
+    {"discount_pct": 20, "avg_units_sold": 139.31}
   ],
-  "recommendation": "A 20.0% discount is projected to increase daily sales from 133.1 to 139.33 units (+4.7% uplift)."
+  "recommendation": "A 20.0% discount is projected to increase daily sales from 130.9 to 139.31 units (+6.4% uplift)."
 }
 ```
 
-The endpoint simulates a 20% discount on P0001 and projects a 4.7% uplift from 133.13 to 139.33 units per day, based on 1,745 historical promo days vs 1,910 non-promo days. The `discount_effect_by_tier` breakdown reveals that the peak uplift actually occurs at 10% (141.61 units), with 15% and 20% performing slightly lower. This means a 20% discount costs more margin than a 10% discount while delivering fewer incremental units. This could be a direct, actionable signal for a retail pricing team.
+Scoped to the first 30 days, the historical promo days actually averaged slightly fewer units (128.6) than non-promo days (130.89), giving a -1.8% historical uplift. However, looking at the discount tiers specifically, the 20% discount tier shows the highest average of 139.31 units per day, which is what drives the +6.4% projected uplift in the recommendation. The 5% and 15% tiers underperform the no-discount baseline, suggesting that for P0001, only deeper discounts meaningfully move the needle in this early period.
 
 ## Stopping and Restarting
-
 ```bash
 # Stop (keeps database data intact)
 docker compose down

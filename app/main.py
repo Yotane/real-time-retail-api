@@ -339,7 +339,7 @@ def price_sensitivity(product_id: str, day: int = None):
     elif -1 <= elasticity < 0:
         interpretation = "Inelastic — customers are not very price sensitive. Price increases have little demand impact."
     elif elasticity >= 0:
-        interpretation = "Positive correlation — higher price correlates with higher sales (possible premium/luxury effect)."
+        interpretation = "Positive elasticity — higher price correlates with higher sales (possible premium/luxury effect)."
     else:
         interpretation = "Insufficient price variation to determine elasticity."
 
