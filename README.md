@@ -256,7 +256,7 @@ Evaluates each combination on a held-out test set (last 20% of history) using RM
 }
 ```
 
-Optuna found that a 4-day window minimizes RMSE for S001/P0001 and that it will sell an average of 66 units per day in the next seven days. This means that this product's demand is best predicted by recent sales rather than long-term averages. Different store/product pairs converge to different optimal windows (S003/P0001 converges to 22 days), which is the core value of running per-combination optimization.
+Optuna found that a 4-day window minimizes RMSE for S001/P0001 and that it will sell an average of 66 units per day in the next seven days. This means that this product's demand is best predicted by recent sales rather than long-term averages. Different store/product pairs converge to different optimal windows (S003/P0001 converges to 22 days), which is the core value of running per-combination optimization. 
 
 ### Recent Kafka Events
 `GET /sales/recent?limit=5`
@@ -325,11 +325,11 @@ Live transactions written by the Kafka consumer as they arrive. Each record repr
 Elasticity of 1.20 with near-zero correlation (-0.016) indicates P0002 behaves as a Veblen-type product in this dataset. This type of product is where its demand does not drop with price increases. This kind of insight would flag P0002 as a candidate for premium pricing strategy.
 
 ### Promotion Simulation
-`GET /promotions/simulate?product_id=P0001&discount_pct=70`
+`GET /promotions/simulate?product_id=P0001&discount_pct=20`
 ```json
 {
   "product_id": "P0001",
-  "simulated_discount_pct": 70,
+  "simulated_discount_pct": 20,
   "baseline_avg_units": 133.13,
   "promo_avg_units": 139.7,
   "historical_uplift_pct": 4.9,
@@ -344,13 +344,11 @@ Elasticity of 1.20 with near-zero correlation (-0.016) indicates P0002 behaves a
     {"discount_pct": 15, "avg_units_sold": 138.35},
     {"discount_pct": 20, "avg_units_sold": 139.33}
   ],
-  "recommendation": "A 70.0% discount is projected to increase daily sales from 133.1 to 139.33 units (+4.7% uplift)."
+  "recommendation": "A 20.0% discount is projected to increase daily sales from 133.1 to 139.33 units (+4.7% uplift)."
 }
 ```
 
-The discount effect tiers show diminishing returns beyond 10%, the largest unit uplift occurs at the 10% tier (141.61 avg units), with 15% and 20% performing slightly lower. This suggests P0001 does not benefit meaningfully from deep discounting, which would be an actionable finding for a retail pricing team.
-
-Different store/product combinations converge to different optimal windows. S001/P0001 performs best with a short 4-day window (reactive to recent spikes), while S003/P0001 converges to 22 days (smoother long-term average). Optuna identifies this automatically per combination rather than using a one-size-fits-all window.
+The endpoint simulates a 20% discount on P0001 and projects a 4.7% uplift from 133.13 to 139.33 units per day, based on 1,745 historical promo days vs 1,910 non-promo days. The `discount_effect_by_tier` breakdown reveals that the peak uplift actually occurs at 10% (141.61 units), with 15% and 20% performing slightly lower. This means a 20% discount costs more margin than a 10% discount while delivering fewer incremental units. This could be a direct, actionable signal for a retail pricing team.
 
 ## Stopping and Restarting
 
