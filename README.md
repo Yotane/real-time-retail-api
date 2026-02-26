@@ -96,7 +96,7 @@ pytest tests/test_api.py -v
 pytest tests/test_api.py::TestOptimizeDemand -v
 ```
 
-28 tests across 6 classes:
+33 tests across 6 classes:
 
 | Class | Coverage |
 |-------|----------|
@@ -109,6 +109,8 @@ pytest tests/test_api.py::TestOptimizeDemand -v
 | `TestOptimizeDemand` | Forecast shape, trial count, trend values, validation errors |
 
 Note: `TestSimulationNextDay` tests auto-skip if the producer hasn't registered dates yet (`total_days == 0`). Run `docker compose up` and wait for the producer to start before running the full suite.
+
+`TestOptimizeDemand` tests pass `day=731` to force full history, bypassing the simulation cutoff. This ensures the optimizer always has enough data regardless of how far through the simulation you are.
 
 ## Project Structure
 ```
@@ -125,6 +127,8 @@ real-time-retail-api/
 │   │   └── producer.py   # Polls API for current day, sends rows to Kafka
 │   └── consumer/
 │       └── consumer.py   # Reads Kafka, writes to MySQL
+├── tests/
+│   └── test_api.py       # 33 integration tests across 6 classes
 ├── data/raw/             # Place dataset CSV here (gitignored)
 ├── docker-compose.yml    # All 6 services
 ├── Dockerfile.api
@@ -180,6 +184,7 @@ optuna_trials → id, study_name, trial_number, store_id, product_id,
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/sales/recent` | Last N events from kafka_events |
+| `GET` | `/sales/valid-combo` | Returns a store/product combo with sufficient history for optimization |
 | `GET` | `/demand/predict` | Moving average demand forecast scoped to simulation day |
 | `GET` | `/price/sensitivity` | Price elasticity analysis scoped to simulation day |
 | `GET` | `/promotions/simulate` | Promotion effect simulation scoped to simulation day |
