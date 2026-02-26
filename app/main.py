@@ -41,6 +41,7 @@ def health():
     return {"status": "ok", "service": "api"}
 
 
+
 # ─── Simulation Control ────────────────────────────────────────────────────
 
 class InitPayload(BaseModel):
@@ -175,6 +176,25 @@ def sales_recent(limit: int = 20):
     conn.close()
     return {"events": [dict(r) for r in rows]}
 
+@app.get("/sales/valid-combo")
+def valid_combo():
+    """Returns a store_id + product_id guaranteed to have 20+ days in sales_facts."""
+    conn   = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT store_id, product_id, COUNT(*) as cnt
+        FROM sales_facts
+        GROUP BY store_id, product_id
+        HAVING cnt >= 20
+        ORDER BY cnt DESC
+        LIMIT 1
+    """)
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="No valid combos found")
+    return {"store_id": row["store_id"], "product_id": row["product_id"], "days": int(row["cnt"])}
 
 @app.get("/demand/predict")
 def demand_predict(store_id: str, product_id: str, days: int = 7, day: int = None):
