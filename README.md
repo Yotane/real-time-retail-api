@@ -384,6 +384,9 @@ docker compose up
 | Real-time Stream | Server-Sent Events (SSE) |
 | DB Driver | mysql-connector-python (no ORM) |
 
+## License
+This project is for educational purposes. Dataset sourced from [Kaggle](https://www.kaggle.com/datasets/anirudhchauhan/retail-store-inventory-forecasting-dataset) under their terms of use.
+
 ## Author
 
 Matt Raymond Ayento  
